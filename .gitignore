@@ -1,0 +1,5 @@
+# IDE folders
+.idea/
+
+# JSON files (Claude export data)
+*.json
