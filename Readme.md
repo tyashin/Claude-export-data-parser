@@ -19,13 +19,9 @@ A Python tool that converts Claude's exported data files (conversations, project
 3. Look for "Export Data" option and click it
 
 ### Step 2: Export Your Data
-1. Choose what to export:
-   - **Conversations** (required) - All your chat history
-   - **Projects** (optional) - Project information and uploaded documents  
-   - **Users** (optional) - Your account information
-2. Request the export
-3. Check your email for a message from Claude with a "Download data" link
-4. Click the download link to get the ZIP file containing your JSON exports
+1. Request the export
+2. Check your email for a message from Claude with a "Download data" link
+3. Click the download link to get the ZIP file containing your JSON exports
 
 ### Step 3: Extract Files
 Extract the downloaded ZIP file. You should have files like:
