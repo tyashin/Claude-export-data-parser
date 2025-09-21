@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 """
-Claude Complete Export Parser - Clean Version
+Claude Complete Export Parser - Refactored Version
 Integrates conversations.json, projects.json, and users.json into a unified markdown structure
 Uses filename analysis to automatically detect file types
 """
 
 import argparse
 import json
-import os
 import re
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Set
+from typing import Dict, List
 
 
 class ClaudeCompleteParser:
@@ -145,8 +144,12 @@ class ClaudeCompleteParser:
 
     def format_message_content(self, message: Dict) -> str:
         """Format a single message's content"""
-        content = message.get('content', [])
+        # First try the direct 'text' field (which exists in the JSON)
+        if 'text' in message and message['text']:
+            return message['text'].strip()
 
+        # Fallback to content array extraction
+        content = message.get('content', [])
         if isinstance(content, str):
             return content.strip()
         elif isinstance(content, list):
@@ -188,73 +191,149 @@ class ClaudeCompleteParser:
 
         return f"{message_count} messages"
 
+    def get_conversation_display_name(self, conversation: Dict) -> str:
+        """Get a proper display name for a conversation, handling empty names"""
+        name = conversation.get('name', '').strip()
+
+        # If name is empty or just whitespace, generate one from first message
+        if not name:
+            messages = conversation.get('chat_messages', [])
+            if messages:
+                # Find first human message with actual content
+                for msg in messages:
+                    if msg.get('sender') == 'human':
+                        first_message = self.format_message_content(msg)
+                        if first_message:
+                            # Clean and truncate for name
+                            clean_message = re.sub(r'```[\s\S]*?```', '[code block]', first_message)
+                            clean_message = re.sub(r'`[^`]*`', '[code]', clean_message)
+                            clean_message = re.sub(r'\n+', ' ', clean_message)
+                            clean_message = re.sub(r'\s+', ' ', clean_message)
+                            clean_message = clean_message.strip()
+
+                            # Use first 50 characters as name
+                            if len(clean_message) > 50:
+                                name = clean_message[:50].rstrip() + "..."
+                            else:
+                                name = clean_message
+                            break
+
+            # If still no name found, create unique name using conversation ID
+            if not name:
+                conv_id = conversation.get('uuid', 'unknown')
+                # Use last 8 characters of UUID for uniqueness
+                short_id = conv_id[-8:] if len(conv_id) >= 8 else conv_id
+                name = f"Untitled Conversation {short_id}"
+
+        return name
+
     def create_readme(self, output_dir: Path) -> None:
         """Create the main README.md file"""
-        readme_lines = []
-
         # Header
-        readme_lines.append("# Claude Export - Complete Archive")
-        readme_lines.append("")
-        readme_lines.append(f"Export generated on: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}")
-        readme_lines.append("")
+        header_content = f"""# Claude Export - Complete Archive
 
-        # User information
+Export generated on: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
+
+"""
+
+        # User information section
+        user_info_section = ""
         if self.users:
             user = self.users[0]  # Assuming single user
-            readme_lines.append("## User Information")
-            readme_lines.append("")
-            readme_lines.append(f"**Name:** {user.get('full_name', 'Unknown')}")
-            readme_lines.append(f"**Email:** {user.get('email_address', 'Unknown')}")
-            readme_lines.append(f"**User ID:** `{user.get('uuid', 'Unknown')}`")
-            readme_lines.append("")
+            user_uuid = user.get('uuid', 'Unknown')
+            user_info_section = f"""## User Information
 
-        # Statistics
+**Name:** {user.get('full_name', 'Unknown')}
+**Email:** {user.get('email_address', 'Unknown')}
+**User ID:** `{user_uuid}`
+
+"""
+
+        # Statistics section
         total_messages = sum(len(conv.get('chat_messages', [])) for conv in self.conversations)
 
-        readme_lines.append("## Overview")
-        readme_lines.append("")
-        readme_lines.append(f"- **Total Projects:** {len(self.projects)}")
-        readme_lines.append(f"- **Total Conversations:** {len(self.conversations)}")
-        readme_lines.append(f"- **Total Messages:** {total_messages}")
-        readme_lines.append("")
+        overview_section = f"""## Overview
+
+- **Total Projects:** {len(self.projects)}
+- **Total Conversations:** {len(self.conversations)}
+- **Total Messages:** {total_messages}
+
+"""
 
         # Date range
+        date_range_section = ""
         dates = [conv.get('created_at', '') for conv in self.conversations if conv.get('created_at')]
         if dates:
             dates.sort()
             first_date = self.format_date(dates[0])
             last_date = self.format_date(dates[-1])
-            readme_lines.append(f"**Date Range:** {first_date} to {last_date}")
-            readme_lines.append("")
+            date_range_section = f"""**Date Range:** {first_date} to {last_date}
 
-        # Structure explanation
-        readme_lines.append("## Archive Structure")
-        readme_lines.append("")
-        readme_lines.append("This archive is organized as follows:")
-        readme_lines.append("")
-        readme_lines.append("```")
-        readme_lines.append("claude_export/")
-        readme_lines.append("├── README.md (this file)")
-        readme_lines.append("├── projects/")
-        readme_lines.append("│   ├── [project_name]/")
-        readme_lines.append("│   │   ├── project_info.md")
-        readme_lines.append("│   │   └── docs/")
-        readme_lines.append("│   │       └── [document_files]")
-        readme_lines.append("├── conversations/")
-        readme_lines.append("│   ├── project_conversations/")
-        readme_lines.append("│   │   └── [conversation_files]")
-        readme_lines.append("│   └── standalone_conversations/")
-        readme_lines.append("│       └── [conversation_files]")
-        readme_lines.append("└── metadata/")
-        readme_lines.append("    ├── projects_index.md")
-        readme_lines.append("    ├── conversations_index.md")
-        readme_lines.append("    └── user_info.md")
-        readme_lines.append("```")
-        readme_lines.append("")
+"""
+
+        # Archive structure (refactored to use multi-line string)
+        structure_section = f"""## Archive Structure
+
+This archive is organized as follows:
+
+```
+{output_dir.name}/
+├── README.md (this file)
+├── projects/
+│   ├── [project_name]/
+│   │   ├── project_info.md
+│   │   └── docs/
+│   │       └── [document_files]
+├── conversations/
+│   ├── project_conversations/
+│   │   └── [conversation_files]
+│   └── standalone_conversations/
+│       └── [conversation_files]
+└── metadata/
+    ├── projects_index.md
+    ├── conversations_index.md
+    └── user_info.md
+```
+
+"""
 
         # Projects section
-        readme_lines.append("## Projects")
-        readme_lines.append("")
+        projects_section = self._create_projects_section()
+
+        # Recent conversations section
+        recent_conversations_section = self._create_recent_conversations_section()
+
+        # Navigation section
+        navigation_section = """## Navigation
+
+- [All Projects](metadata/projects_index.md)
+- [All Conversations](metadata/conversations_index.md)
+- [User Information](metadata/user_info.md)
+
+"""
+
+        # Combine all sections
+        readme_content = (
+                header_content +
+                user_info_section +
+                overview_section +
+                date_range_section +
+                structure_section +
+                projects_section +
+                recent_conversations_section +
+                navigation_section
+        )
+
+        # Write README
+        readme_path = output_dir / "README.md"
+        with open(readme_path, 'w', encoding='utf-8') as f:
+            f.write(readme_content)
+
+        print(f"Created main README: {readme_path}")
+
+    def _create_projects_section(self) -> str:
+        """Create the projects section for the README"""
+        section_lines = ["## Projects\n"]
 
         if self.projects:
             # Sort projects by creation date
@@ -270,21 +349,23 @@ class ClaudeCompleteParser:
                 created = self.format_date(project.get('created_at', ''))
                 doc_count = len(project.get('docs', []))
 
-                readme_lines.append(f"### [{name}](projects/{self.safe_filename(name)}/project_info.md)")
-                if description:
-                    readme_lines.append(f"*{description}*")
-                readme_lines.append("")
-                readme_lines.append(f"- **Created:** {created}")
-                readme_lines.append(f"- **Documents:** {doc_count}")
-                readme_lines.append(f"- **Private:** {'Yes' if project.get('is_private', False) else 'No'}")
-                readme_lines.append("")
-        else:
-            readme_lines.append("No projects found.")
-            readme_lines.append("")
+                project_block = f"""### [{name}](projects/{self.safe_filename(name)}/project_info.md)
+{f"*{description}*" if description else ""}
 
-        # Quick access to conversations
-        readme_lines.append("## Recent Conversations")
-        readme_lines.append("")
+- **Created:** {created}
+- **Documents:** {doc_count}
+- **Private:** {'Yes' if project.get('is_private', False) else 'No'}
+
+"""
+                section_lines.append(project_block)
+        else:
+            section_lines.append("No projects found.\n")
+
+        return "".join(section_lines)
+
+    def _create_recent_conversations_section(self) -> str:
+        """Create the recent conversations section for the README"""
+        section_lines = ["## Recent Conversations\n"]
 
         # Show 10 most recent conversations
         recent_conversations = sorted(
@@ -299,24 +380,11 @@ class ClaudeCompleteParser:
             updated = self.format_date(conv.get('updated_at', ''))
             filename = self.safe_filename(name) + '.md'
 
-            readme_lines.append(f"- [{name}](conversations/standalone_conversations/{filename})")
-            readme_lines.append(f"  *{summary}* - {updated}")
-            readme_lines.append("")
+            conversation_line = f"- [{name}](conversations/standalone_conversations/{filename})\n  *{summary}* - {updated}\n"
+            section_lines.append(conversation_line)
 
-        # Navigation links
-        readme_lines.append("## Navigation")
-        readme_lines.append("")
-        readme_lines.append("- [All Projects](metadata/projects_index.md)")
-        readme_lines.append("- [All Conversations](metadata/conversations_index.md)")
-        readme_lines.append("- [User Information](metadata/user_info.md)")
-        readme_lines.append("")
-
-        # Write README
-        readme_path = output_dir / "README.md"
-        with open(readme_path, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(readme_lines))
-
-        print(f"Created main README: {readme_path}")
+        section_lines.append("\n")
+        return "".join(section_lines)
 
     def create_projects_structure(self, output_dir: Path) -> None:
         """Create project folders and documentation"""
@@ -344,95 +412,122 @@ class ClaudeCompleteParser:
 
     def create_project_info(self, project: Dict, project_dir: Path) -> None:
         """Create project_info.md for a project"""
-        lines = []
-
         name = project.get('name', 'Untitled Project')
-        lines.append(f"# {name}")
-        lines.append("")
 
-        # Project metadata
-        lines.append("## Project Information")
-        lines.append("")
+        # Project header and basic info
+        header_section = f"""# {name}
 
+## Project Information
+
+"""
+
+        # Description and metadata
         description = project.get('description', '')
-        if description:
-            lines.append(f"**Description:** {description}")
-        else:
-            lines.append("**Description:** No description provided")
+        metadata_section = f"""{"**Description:** " + description if description else "**Description:** No description provided"}
+**Created:** {self.format_date(project.get('created_at', ''))}
+**Last Updated:** {self.format_date(project.get('updated_at', ''))}
+**Private:** {'Yes' if project.get('is_private', False) else 'No'}
+**Starter Project:** {'Yes' if project.get('is_starter_project', False) else 'No'}
 
-        lines.append(f"**Created:** {self.format_date(project.get('created_at', ''))}")
-        lines.append(f"**Last Updated:** {self.format_date(project.get('updated_at', ''))}")
-        lines.append(f"**Private:** {'Yes' if project.get('is_private', False) else 'No'}")
-        lines.append(f"**Starter Project:** {'Yes' if project.get('is_starter_project', False) else 'No'}")
-        lines.append("")
+"""
 
         # Creator info
+        creator_section = ""
         creator = project.get('creator', {})
         if creator:
-            lines.append(f"**Creator:** {creator.get('full_name', 'Unknown')}")
-            lines.append(f"**Creator ID:** `{creator.get('uuid', 'Unknown')}`")
-            lines.append("")
+            creator_uuid = creator.get('uuid', 'Unknown')
+            creator_section = f"""**Creator:** {creator.get('full_name', 'Unknown')}
+**Creator ID:** `{creator_uuid}`
 
-        # Project UUID
-        lines.append(f"**Project ID:** `{project.get('uuid', 'Unknown')}`")
-        lines.append("")
+"""
+
+        # Project ID
+        project_uuid = project.get('uuid', 'Unknown')
+        project_id_section = f"""**Project ID:** `{project_uuid}`
+
+"""
 
         # Prompt template
+        prompt_section = ""
         prompt_template = project.get('prompt_template', '')
         if prompt_template:
-            lines.append("## Prompt Template")
-            lines.append("")
-            lines.append(f"> {prompt_template}")
-            lines.append("")
+            prompt_section = f"""## Prompt Template
 
-        # Documents
-        docs = project.get('docs', [])
-        if docs:
-            lines.append("## Documents")
-            lines.append("")
+> {prompt_template}
 
-            for doc in docs:
-                filename = doc.get('filename', 'Untitled Document')
-                doc_filename = self.safe_filename(filename)
-                created = self.format_date(doc.get('created_at', ''))
+"""
 
-                lines.append(f"- [{filename}](docs/{doc_filename}.md) - Created {created}")
+        # Documents section
+        docs_section = self._create_project_docs_section(project.get('docs', []))
 
-            lines.append("")
-        else:
-            lines.append("## Documents")
-            lines.append("")
-            lines.append("No documents in this project.")
-            lines.append("")
+        # Combine all sections
+        content = (
+                header_section +
+                metadata_section +
+                creator_section +
+                project_id_section +
+                prompt_section +
+                docs_section
+        )
 
         # Write project info file
         info_path = project_dir / "project_info.md"
         with open(info_path, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(lines))
+            f.write(content)
+
+    def _create_project_docs_section(self, docs: List[Dict]) -> str:
+        """Create the documents section for project info"""
+        if not docs:
+            return """## Documents
+
+No documents in this project.
+
+"""
+
+        docs_lines = ["## Documents\n"]
+
+        for doc in docs:
+            filename = doc.get('filename', 'Untitled Document')
+            doc_filename = self.safe_filename(filename)
+            created = self.format_date(doc.get('created_at', ''))
+
+            docs_lines.append(f"- [{filename}](docs/{doc_filename}.md) - Created {created}\n")
+
+        docs_lines.append("\n")
+        return "".join(docs_lines)
 
     def create_project_document(self, doc: Dict, docs_dir: Path) -> None:
         """Create a document file for a project"""
         filename = doc.get('filename', 'Untitled Document')
         safe_filename = self.safe_filename(filename) + '.md'
 
-        lines = []
-        lines.append(f"# {filename}")
-        lines.append("")
-        lines.append(f"**Created:** {self.format_date(doc.get('created_at', ''))}")
-        lines.append(f"**Document ID:** `{doc.get('uuid', 'Unknown')}`")
-        lines.append("")
-        lines.append("---")
-        lines.append("")
+        doc_uuid = doc.get('uuid', 'Unknown')
+        content = f"""# {filename}
 
-        content = doc.get('content', '')
-        if content:
-            lines.append(content)
-        else:
-            lines.append("*No content available*")
+**Created:** {self.format_date(doc.get('created_at', ''))}
+**Document ID:** `{doc_uuid}`
+
+---
+
+{doc.get('content', '') or '*No content available*'}"""
 
         doc_path = docs_dir / safe_filename
         with open(doc_path, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(lines))
+            f.write(content)
+
+    def has_meaningful_content(self, conversation: Dict) -> bool:
+        """Check if a conversation has any meaningful content"""
+        messages = conversation.get('chat_messages', [])
+        if not messages:
+            return False
+
+        # Check if any message has actual content
+        for msg in messages:
+            content = self.format_message_content(msg)
+            if content and content.strip():
+                return True
+
+        return False
 
     def create_conversations_structure(self, output_dir: Path) -> None:
         """Create conversations structure"""
@@ -448,84 +543,95 @@ class ClaudeCompleteParser:
         project_conv_dir = conversations_dir / "project_conversations"
         project_conv_dir.mkdir(parents=True, exist_ok=True)
 
-        for conversation in self.conversations:
+        # Filter out conversations with no meaningful content
+        meaningful_conversations = [conv for conv in self.conversations if self.has_meaningful_content(conv)]
+        skipped_count = len(self.conversations) - len(meaningful_conversations)
+
+        for conversation in meaningful_conversations:
             self.create_conversation_file(conversation, standalone_dir)
 
-        print(f"Created {len(self.conversations)} conversation files")
+        print(f"Created {len(meaningful_conversations)} conversation files")
+        if skipped_count > 0:
+            print(f"Skipped {skipped_count} conversations with no meaningful content")
+
+        # Update the conversations list to only include meaningful ones for other operations
+        self.conversations = meaningful_conversations
 
     def create_conversation_file(self, conversation: Dict, output_dir: Path) -> None:
         """Create a conversation markdown file"""
-        name = conversation.get('name', 'Untitled Conversation')
+        name = self.get_conversation_display_name(conversation)
         filename = self.safe_filename(name) + '.md'
 
-        lines = []
-        lines.append(f"# {name}")
-        lines.append("")
+        # Header and metadata
+        header_section = f"""# {name}
 
-        # Conversation metadata
-        lines.append("## Conversation Details")
-        lines.append("")
+## Conversation Details
 
+"""
+
+        # Summary and basic info
         summary = conversation.get('summary', '')
-        if summary:
-            lines.append(f"**Summary:** {summary}")
-            lines.append("")
+        conv_uuid = conversation.get('uuid', 'Unknown')
+        summary_line = f"**Summary:** {summary}\n\n" if summary else ""
+        created_line = f"**Created:** {self.format_date(conversation.get('created_at', ''))}"
+        updated_line = f"**Last Updated:** {self.format_date(conversation.get('updated_at', ''))}"
+        conv_id_line = f"**Conversation ID:** `{conv_uuid}`"
 
-        lines.append(f"**Created:** {self.format_date(conversation.get('created_at', ''))}")
-        lines.append(f"**Last Updated:** {self.format_date(conversation.get('updated_at', ''))}")
-        lines.append(f"**Conversation ID:** `{conversation.get('uuid', 'Unknown')}`")
+        summary_section = summary_line + created_line + "\n" + updated_line + "\n" + conv_id_line
 
+        # Account info
+        account_section = ""
         if conversation.get('account'):
             account_info = conversation['account']
             if account_info.get('uuid'):
-                lines.append(f"**Account ID:** `{account_info['uuid']}`")
+                account_uuid = account_info['uuid']
+                account_section = f"\n**Account ID:** `{account_uuid}`"
 
-        lines.append("")
-        lines.append("---")
-        lines.append("")
+        metadata_section = summary_section + account_section + "\n\n---\n\n"
 
-        # Messages
-        messages = conversation.get('chat_messages', [])
+        # Messages section
+        messages_section = self._create_messages_section(conversation.get('chat_messages', []))
 
-        if not messages:
-            lines.append("*No messages in this conversation.*")
-        else:
-            lines.append(f"## Messages ({len(messages)})")
-            lines.append("")
-
-            for i, message in enumerate(messages, 1):
-                sender = message.get('sender', 'unknown')
-                timestamp = self.format_date(message.get('created_at', ''))
-                content = self.format_message_content(message)
-
-                # Message header
-                if sender == 'human':
-                    lines.append(f"### {i}. Human")
-                elif sender == 'assistant':
-                    lines.append(f"### {i}. Assistant")
-                else:
-                    lines.append(f"### {i}. {sender.title()}")
-
-                lines.append(f"*{timestamp}*")
-                lines.append("")
-
-                # Message content
-                if content:
-                    lines.append(content)
-                else:
-                    lines.append("*[No content]*")
-
-                lines.append("")
-
-                # Add separator between messages (except for the last one)
-                if i < len(messages):
-                    lines.append("---")
-                    lines.append("")
+        # Combine all sections
+        content = header_section + metadata_section + messages_section
 
         # Write conversation file
         conv_path = output_dir / filename
         with open(conv_path, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(lines))
+            f.write(content)
+
+    def _create_messages_section(self, messages: List[Dict]) -> str:
+        """Create the messages section for a conversation"""
+        if not messages:
+            return "*No messages in this conversation.*"
+
+        section_lines = [f"## Messages ({len(messages)})\n"]
+
+        for i, message in enumerate(messages, 1):
+            sender = message.get('sender', 'unknown')
+            timestamp = self.format_date(message.get('created_at', ''))
+            content = self.format_message_content(message)
+
+            # Message header
+            sender_name = {
+                'human': 'Human',
+                'assistant': 'Assistant'
+            }.get(sender, sender.title())
+
+            message_block = f"""### {i}. {sender_name}
+*{timestamp}*
+
+{content or '*[No content]*'}
+
+"""
+
+            section_lines.append(message_block)
+
+            # Add separator between messages (except for the last one)
+            if i < len(messages):
+                section_lines.append("---\n")
+
+        return "".join(section_lines)
 
     def create_metadata_files(self, output_dir: Path) -> None:
         """Create metadata index files"""
@@ -545,15 +651,14 @@ class ClaudeCompleteParser:
 
     def create_projects_index(self, metadata_dir: Path) -> None:
         """Create projects index file"""
-        lines = []
-        lines.append("# Projects Index")
-        lines.append("")
-        lines.append(f"Total projects: **{len(self.projects)}**")
-        lines.append("")
+        header_section = f"""# Projects Index
+
+Total projects: **{len(self.projects)}**
+
+"""
 
         if not self.projects:
-            lines.append("No projects found.")
-            lines.append("")
+            content = header_section + "No projects found.\n"
         else:
             # Sort by creation date (newest first)
             sorted_projects = sorted(
@@ -562,8 +667,7 @@ class ClaudeCompleteParser:
                 reverse=True
             )
 
-            lines.append("## All Projects")
-            lines.append("")
+            projects_section = "## All Projects\n\n"
 
             for project in sorted_projects:
                 name = project.get('name', 'Untitled Project')
@@ -572,35 +676,35 @@ class ClaudeCompleteParser:
                 doc_count = len(project.get('docs', []))
                 safe_name = self.safe_filename(name)
 
-                lines.append(f"### [{name}](../projects/{safe_name}/project_info.md)")
+                project_block = f"""### [{name}](../projects/{safe_name}/project_info.md)
+{f"*{description}*" if description else ""}
 
-                if description:
-                    lines.append(f"*{description}*")
+- **Created:** {created}
+- **Documents:** {doc_count}
+- **Private:** {'Yes' if project.get('is_private', False) else 'No'}
 
-                lines.append("")
-                lines.append(f"- **Created:** {created}")
-                lines.append(f"- **Documents:** {doc_count}")
-                lines.append(f"- **Private:** {'Yes' if project.get('is_private', False) else 'No'}")
-                lines.append("")
+"""
+                projects_section += project_block
+
+            content = header_section + projects_section
 
         index_path = metadata_dir / "projects_index.md"
         with open(index_path, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(lines))
+            f.write(content)
 
     def create_conversations_index(self, metadata_dir: Path) -> None:
         """Create conversations index file"""
-        lines = []
-        lines.append("# Conversations Index")
-        lines.append("")
-
         total_messages = sum(len(conv.get('chat_messages', [])) for conv in self.conversations)
-        lines.append(f"Total conversations: **{len(self.conversations)}**")
-        lines.append(f"Total messages: **{total_messages}**")
-        lines.append("")
+
+        header_section = f"""# Conversations Index
+
+Total conversations: **{len(self.conversations)}**
+Total messages: **{total_messages}**
+
+"""
 
         if not self.conversations:
-            lines.append("No conversations found.")
-            lines.append("")
+            content = header_section + "No conversations found.\n"
         else:
             # Sort by last update (newest first)
             sorted_conversations = sorted(
@@ -609,49 +713,46 @@ class ClaudeCompleteParser:
                 reverse=True
             )
 
-            lines.append("## All Conversations")
-            lines.append("")
+            conversations_section = "## All Conversations\n\n"
 
             for conversation in sorted_conversations:
-                name = conversation.get('name', 'Untitled Conversation')
+                name = self.get_conversation_display_name(conversation)
                 updated = self.format_date(conversation.get('updated_at', ''))
-                message_count = len(conversation.get('chat_messages', []))
                 summary = self.get_conversation_summary(conversation)
                 filename = self.safe_filename(name) + '.md'
 
-                lines.append(f"- [{name}](../conversations/standalone_conversations/{filename})")
-                lines.append(f"  *{summary}* - Updated {updated}")
-                lines.append("")
+                conversation_line = f"- [{name}](../conversations/standalone_conversations/{filename})\n  *{summary}* - Updated {updated}\n\n"
+                conversations_section += conversation_line
+
+            content = header_section + conversations_section
 
         index_path = metadata_dir / "conversations_index.md"
         with open(index_path, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(lines))
+            f.write(content)
 
     def create_user_info(self, metadata_dir: Path) -> None:
         """Create user information file"""
-        lines = []
-        lines.append("# User Information")
-        lines.append("")
+        content = "# User Information\n\n"
 
         if not self.users:
-            lines.append("No user information available.")
+            content += "No user information available."
         else:
             for user in self.users:
-                lines.append(f"**Name:** {user.get('full_name', 'Unknown')}")
-                lines.append(f"**Email:** {user.get('email_address', 'Unknown')}")
-                lines.append(f"**User ID:** `{user.get('uuid', 'Unknown')}`")
-
                 phone = user.get('verified_phone_number')
-                if phone:
-                    lines.append(f"**Verified Phone:** {phone}")
-                else:
-                    lines.append("**Verified Phone:** Not provided")
+                phone_line = f"**Verified Phone:** {phone}" if phone else "**Verified Phone:** Not provided"
+                user_uuid = user.get('uuid', 'Unknown')
 
-                lines.append("")
+                user_block = f"""**Name:** {user.get('full_name', 'Unknown')}
+**Email:** {user.get('email_address', 'Unknown')}
+**User ID:** `{user_uuid}`
+{phone_line}
+
+"""
+                content += user_block
 
         user_path = metadata_dir / "user_info.md"
         with open(user_path, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(lines))
+            f.write(content)
 
     def export_to_markdown(self, output_dir: str) -> None:
         """Export all data to markdown structure"""
